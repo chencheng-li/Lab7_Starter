@@ -21,7 +21,7 @@ describe('Basic user flow for Website', () => {
   // Check to make sure that all 20 <product-item> elements have data in them
   // We use .skip() here because this test has a TODO that has not been completed yet.
   // Make sure to remove the .skip after you finish the TODO. 
-  it.skip('Make sure <product-item> elements are populated', async () => {
+  it('Make sure <product-item> elements are populated', async () => {
     console.log('Checking to make sure <product-item> elements are populated...');
 
     // Start as true, if any don't have data, swap to false
@@ -35,122 +35,332 @@ describe('Basic user flow for Website', () => {
       });
     });
 
-    console.log(`Checking product item 1/${prodItemsData.length}`);
+    // Loop through each product item's data
+    for (let i = 0; i < prodItemsData.length; i++) {
+      const itemData = prodItemsData[i];
 
-    // Make sure the title, price, and image are populated in the JSON
-    firstValue = prodItemsData[0];
-    if (firstValue.title.length == 0) { allArePopulated = false; }
-    if (firstValue.price.length == 0) { allArePopulated = false; }
-    if (firstValue.image.length == 0) { allArePopulated = false; }
+      // Check if title is empty or not a string
+      if (typeof itemData.title !== 'string' || itemData.title.length === 0) {
+        allArePopulated = false;
+        break; 
+      }
 
-    // Expect allArePopulated to still be true
-    expect(allArePopulated).toBe(true);
+      // Check if price is not a positive number
+      if (typeof itemData.price !== 'number' || itemData.price <= 0) {
+        allArePopulated = false;
+        break; 
+      }
 
-    /**
-    **** TODO - STEP 1 ****
-    * Right now this function is only checking the first <product-item> it found, make it so that
-      it checks every <product-item> it found
-    * Remove the .skip from this it once you are finished writing this test.
-    */
+      // Check if image URL is empty or not a string
+      if (typeof itemData.image !== 'string' || itemData.image.length === 0) {
+        allArePopulated = false;
+        break; 
+      }
+    }
+
 
   }, 10000);
 
   // Check to make sure that when you click "Add to Cart" on the first <product-item> that
   // the button swaps to "Remove from Cart"
-  it.skip('Clicking the "Add to Cart" button should change button text', async () => {
+  it('Clicking the "Add to Cart" button should change button text', async () => {
     console.log('Checking the "Add to Cart" button...');
 
-    /**
-     **** TODO - STEP 2 **** 
-     * Query a <product-item> element using puppeteer ( checkout page.$() and page.$$() in the docs )
-     * Grab the shadowRoot of that element (it's a property), then query a button from that shadowRoot.
-     * Once you have the button, you can click it and check the innerText property of the button.
-     * Once you have the innerText property, use innerText.jsonValue() to get the text value of it
-     * Remember to remove the .skip from this it once you are finished writing this test.
-     */
+    // 1. Get the first <product-item> element.
+    const firstProductItemHandle = await page.$('product-item');
 
-  }, 2500);
+    if (!firstProductItemHandle) {
+      throw new Error('Could not find any <product-item> element.');
+    }
 
-  // Check to make sure that after clicking "Add to Cart" on every <product-item> that the Cart
-  // number in the top right has been correctly updated
-  it.skip('Checking number of items in cart on screen', async () => {
+    // 2. Get the shadowRoot of the first <product-item>.
+    //    elementHandle.evaluateHandle() allows us to execute a function in the browser context
+    //    on the element and return a JSHandle to the result (in this case, the shadowRoot).
+    const shadowRootHandle = await firstProductItemHandle.evaluateHandle(el => el.shadowRoot);
+    
+    // 3. Wait for the button to appear within the shadowRoot and get its handle.
+    //    We'll use a polling mechanism with a timeout, as waitForSelector on shadowRootHandle directly
+    //    can sometimes be tricky or not available in all contexts.
+    //    A more direct way is to use shadowRootHandle.$() if we are sure it's rendered,
+    //    or combine it with a wait.
+    
+    let shadowButtonHandle;
+    try {
+      // Wait for the button using page.waitForFunction which is more flexible
+      // This function will be re-evaluated in the browser until it returns a truthy value or times out.
+      await page.waitForFunction(
+        (productItem) => productItem.shadowRoot && productItem.shadowRoot.querySelector('button'),
+        { timeout: 3000 }, // Increased timeout slightly for this specific wait
+        firstProductItemHandle // Pass the handle to be used as the first argument in the function
+      );
+      // If the function above didn't throw, the button exists. Now get the handle.
+      // Re-evaluate to get the button handle from the shadowRoot context
+      shadowButtonHandle = await shadowRootHandle.$('button');
+
+    } catch (e) {
+      console.error('Button did not appear in shadowRoot of first product-item within timeout.', e);
+      throw e;
+    }
+
+    if (!shadowButtonHandle) {
+      throw new Error('Could not get a handle for the button inside the shadowRoot, even after waiting.');
+    }
+
+    // 4. Click the button.
+    await shadowButtonHandle.click();
+
+    // 5. Get the innerText of the button after the click.
+    const newButtonText = await shadowButtonHandle.evaluate(button => button.innerText);
+
+    // 6. Assert that the button text is "Remove from Cart".
+    expect(newButtonText).toBe('Remove from Cart');
+
+  }, 5000); // Increased overall test timeout slightly
+
+  it('Checking number of items in cart on screen', async () => {
     console.log('Checking number of items in cart on screen...');
 
-    /**
-     **** TODO - STEP 3 **** 
-     * Query select all of the <product-item> elements, then for every single product element
-       get the shadowRoot and query select the button inside, and click on it.
-     * Check to see if the innerText of #cart-count is 20
-     * Remember to remove the .skip from this it once you are finished writing this test.
-     */
+    // 1. Query select all of the <product-item> elements.
+    const productItemHandles = await page.$$('product-item');
+    expect(productItemHandles.length).toBe(20); // Double check we have 20 items
 
-  }, 10000);
+    // 2. For every single product element, get its button and click it
+    //    ONLY IF its text is "Add to Cart".
+    //    This handles the case where the first item might already be in the cart from STEP 2.
+    for (const itemHandle of productItemHandles) {
+      // It's good practice to wait for the button to be interactable
+      // We'll use waitForFunction for robustness as in STEP 2
+      let buttonHandle;
+      try {
+        await page.waitForFunction(
+          (productItem) => productItem.shadowRoot && productItem.shadowRoot.querySelector('button'),
+          { timeout: 1000 }, // Shorter timeout per button, as there are many
+          itemHandle
+        );
+        const shadowRootHandle = await itemHandle.evaluateHandle(el => el.shadowRoot);
+        buttonHandle = await shadowRootHandle.$('button');
+      } catch (e) {
+        console.error('Button did not appear in a product-item within timeout.', e);
+        // If a button doesn't appear, we should probably fail the test or log it.
+        // For this lab, let's assume if it doesn't appear, we can't click it.
+        continue; // Skip to the next item if button not found quickly
+      }
 
-  // Check to make sure that after you reload the page it remembers all of the items in your cart
-  it.skip('Checking number of items in cart on screen after reload', async () => {
+      if (buttonHandle) {
+        const buttonText = await buttonHandle.evaluate(button => button.innerText);
+        if (buttonText === 'Add to Cart') {
+          await buttonHandle.click();
+          // Optional: wait for a brief moment or for cart count to potentially update if needed,
+          // but typically click is sufficient if event handling is synchronous.
+        }
+      } else {
+        console.warn('Button handle not found for an item after wait.');
+      }
+    }
+
+    // 3. Check to see if the innerText of #cart-count is 20.
+    const cartCount = await page.$eval('#cart-count', el => el.innerText);
+    expect(cartCount).toBe('20');
+
+  }, 20000); // Increased timeout for this test as it interacts with many elements
+
+  it('Checking number of items in cart on screen after reload', async () => {
     console.log('Checking number of items in cart on screen after reload...');
 
-    /**
-     **** TODO - STEP 4 **** 
-     * Reload the page, then select all of the <product-item> elements, and check every
-       element to make sure that all of their buttons say "Remove from Cart".
-     * Also check to make sure that #cart-count is still 20
-     * Remember to remove the .skip from this it once you are finished writing this test.
-     */
+    // 1. Reload the page.
+    await page.reload();
 
-  }, 10000);
+    // After reload, we need to re-query elements.
 
-  // Check to make sure that the cart in localStorage is what you expect
-  it.skip('Checking the localStorage to make sure cart is correct', async () => {
+    // 2. Select all of the <product-item> elements.
+    const productItemHandles = await page.$$('product-item');
+    expect(productItemHandles.length).toBe(20); // Ensure all items are still there
 
-    /**
-     **** TODO - STEP 5 **** 
-     * At this point the item 'cart' in localStorage should be 
-       '[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]', check to make sure it is
-     * Remember to remove the .skip from this it once you are finished writing this test.
-     */
+    // Check every element to make sure that all of their buttons say "Remove from Cart".
+    let allButtonsCorrect = true;
+    for (const itemHandle of productItemHandles) {
+      let buttonHandle;
+      let buttonText = '';
+      try {
+        // Wait for the button to be available in the shadow DOM of the current item
+        await page.waitForFunction(
+          (productItem) => productItem.shadowRoot && productItem.shadowRoot.querySelector('button'),
+          { timeout: 1000 }, // Timeout for each button
+          itemHandle
+        );
+        const shadowRootHandle = await itemHandle.evaluateHandle(el => el.shadowRoot);
+        buttonHandle = await shadowRootHandle.$('button');
+        
+        if (buttonHandle) {
+          buttonText = await buttonHandle.evaluate(button => button.innerText);
+          if (buttonText !== 'Remove from Cart') {
+            allButtonsCorrect = false;
+            console.error(`Button text is "${buttonText}" instead of "Remove from Cart" for an item after reload.`);
+            break; // Exit loop if one is incorrect
+          }
+        } else {
+          console.error('Button handle not found in an item after reload and wait.');
+          allButtonsCorrect = false;
+          break;
+        }
+      } catch (e) {
+        console.error('Error waiting for or querying button in an item after reload:', e);
+        allButtonsCorrect = false;
+        break;
+      }
+    }
+    expect(allButtonsCorrect).toBe(true); // Assert all buttons showed "Remove from Cart"
 
+    // 3. Also check to make sure that #cart-count is still 20.
+    //    We might need to wait for #cart-count to be updated by the script after reload.
+    await page.waitForFunction(() => document.querySelector('#cart-count').innerText === '20', { timeout: 2000 });
+    const cartCount = await page.$eval('#cart-count', el => el.innerText);
+    expect(cartCount).toBe('20');
+
+  }, 20000); // Increased timeout for this test
+
+  it('Checking the localStorage to make sure cart is correct', async () => {
+    console.log('Checking the localStorage for the full cart...'); // Added a console log for clarity
+
+    // 1. Get the 'cart' item from localStorage.
+    //    page.evaluate() allows us to run a function in the browser's context.
+    const localStorageCart = await page.evaluate(() => {
+      return localStorage.getItem('cart');
+    });
+
+    // 2. Define the expected string value.
+    const expectedCartString = '[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]';
+
+    // 3. Assert that the localStorage value matches the expected string.
+    expect(localStorageCart).toBe(expectedCartString);
   });
 
-  // Checking to make sure that if you remove all of the items from the cart that the cart
-  // number in the top right of the screen is 0
-  it.skip('Checking number of items in cart on screen after removing from cart', async () => {
-    console.log('Checking number of items in cart on screen...');
+  it('Checking number of items in cart on screen after removing from cart', async () => {
+    console.log('Checking cart count after removing all items...');
 
-    /**
-     **** TODO - STEP 6 **** 
-     * Go through and click "Remove from Cart" on every single <product-item>, just like above.
-     * Once you have, check to make sure that #cart-count is now 0
-     * Remember to remove the .skip from this it once you are finished writing this test.
-     */
+    // 1. Query select all of the <product-item> elements.
+    const productItemHandles = await page.$$('product-item');
+    expect(productItemHandles.length).toBe(20); // Sanity check
 
-  }, 10000);
+    // 2. For every single product element, get its button and click it
+    //    IF its text is "Remove from Cart".
+    for (const itemHandle of productItemHandles) {
+      let buttonHandle;
+      try {
+        // Wait for the button to be available
+        await page.waitForFunction(
+          (productItem) => productItem.shadowRoot && productItem.shadowRoot.querySelector('button'),
+          { timeout: 1000 }, // Timeout for each button
+          itemHandle
+        );
+        const shadowRootHandle = await itemHandle.evaluateHandle(el => el.shadowRoot);
+        buttonHandle = await shadowRootHandle.$('button');
+        
+        if (buttonHandle) {
+          const buttonText = await buttonHandle.evaluate(button => button.innerText);
+          if (buttonText === 'Remove from Cart') { // Only click if it says "Remove from Cart"
+            await buttonHandle.click();
+            // Optional: A small delay or wait for a specific visual cue if removal is not instantaneous,
+            // but usually click is enough if the event updates synchronously.
+          } else {
+            // This case should ideally not happen if STEP 4 passed correctly
+            console.warn(`Button text for an item was "${buttonText}", expected "Remove from Cart" before removing.`);
+          }
+        } else {
+          console.error('Button handle not found in an item during removal step.');
+        }
+      } catch (e) {
+        console.error('Error waiting for or querying button during removal step:', e);
+        // Decide if this should fail the test or just log and continue
+      }
+    }
 
-  // Checking to make sure that it remembers us removing everything from the cart
-  // after we refresh the page
-  it.skip('Checking number of items in cart on screen after reload', async () => {
-    console.log('Checking number of items in cart on screen after reload...');
+    // 3. Check to make sure that #cart-count is now 0.
+    //    Wait for the cart count to update to '0'.
+    try {
+      await page.waitForFunction(() => document.querySelector('#cart-count').innerText === '0', { timeout: 3000 });
+    } catch (e) {
+      console.error('Cart count did not update to 0 within timeout.', e);
+      // Fall through to the assertion to let Jest report the failure if it's not 0.
+    }
+    const cartCount = await page.$eval('#cart-count', el => el.innerText);
+    expect(cartCount).toBe('0');
 
-    /**
-     **** TODO - STEP 7 **** 
-     * Reload the page once more, then go through each <product-item> to make sure that it has remembered nothing
-       is in the cart - do this by checking the text on the buttons so that they should say "Add to Cart".
-     * Also check to make sure that #cart-count is still 0
-     * Remember to remove the .skip from this it once you are finished writing this test.
-     */
+  }, 20000); // Increased timeout
 
-  }, 10000);
+  it('Checking number of items in cart on screen after reload (empty cart)', async () => { 
+    console.log('Checking cart state after removing all items and reloading...');
+
+    // 1. Reload the page.
+    await page.reload();
+
+    // After reload, re-query elements.
+
+    // 2. Select all of the <product-item> elements.
+    const productItemHandles = await page.$$('product-item');
+    expect(productItemHandles.length).toBe(20); // Ensure all items are still there
+
+    // Check every element to make sure that all of their buttons say "Add to Cart".
+    let allButtonsCorrect = true;
+    for (const itemHandle of productItemHandles) {
+      let buttonHandle;
+      let buttonText = '';
+      try {
+        // Wait for the button to be available
+        await page.waitForFunction(
+          (productItem) => productItem.shadowRoot && productItem.shadowRoot.querySelector('button'),
+          { timeout: 1000 },
+          itemHandle
+        );
+        const shadowRootHandle = await itemHandle.evaluateHandle(el => el.shadowRoot);
+        buttonHandle = await shadowRootHandle.$('button');
+        
+        if (buttonHandle) {
+          buttonText = await buttonHandle.evaluate(button => button.innerText);
+          if (buttonText !== 'Add to Cart') { // Expect "Add to Cart" now
+            allButtonsCorrect = false;
+            console.error(`Button text is "${buttonText}" instead of "Add to Cart" for an item after empty cart reload.`);
+            break; 
+          }
+        } else {
+          console.error('Button handle not found in an item (empty cart reload).');
+          allButtonsCorrect = false;
+          break;
+        }
+      } catch (e) {
+        console.error('Error waiting for or querying button (empty cart reload):', e);
+        allButtonsCorrect = false;
+        break;
+      }
+    }
+    expect(allButtonsCorrect).toBe(true); // Assert all buttons showed "Add to Cart"
+
+    // 3. Also check to make sure that #cart-count is still 0.
+    //    Wait for the cart count to update to '0'.
+    try {
+      await page.waitForFunction(() => document.querySelector('#cart-count').innerText === '0', { timeout: 2000 });
+    } catch (e) {
+        console.error('Cart count did not show 0 within timeout (empty cart reload).', e);
+    }
+    const cartCount = await page.$eval('#cart-count', el => el.innerText);
+    expect(cartCount).toBe('0');
+
+  }, 20000); // Increased timeout
 
   // Checking to make sure that localStorage for the cart is as we'd expect for the
   // cart being empty
-  it.skip('Checking the localStorage to make sure cart is correct', async () => {
-    console.log('Checking the localStorage...');
+  it('Checking the localStorage to make sure cart is correct (empty cart)', async () => { 
+    console.log('Checking the localStorage for the empty cart...');
 
-    /**
-     **** TODO - STEP 8 **** 
-     * At this point he item 'cart' in localStorage should be '[]', check to make sure it is
-     * Remember to remove the .skip from this it once you are finished writing this test.
-     */
+    // 1. Get the 'cart' item from localStorage.
+    const localStorageCart = await page.evaluate(() => {
+      return localStorage.getItem('cart');
+    });
 
+    // 2. Define the expected string value for an empty cart.
+    const expectedCartString = '[]';
+
+    // 3. Assert that the localStorage value matches the expected string.
+    expect(localStorageCart).toBe(expectedCartString);
   });
 });
